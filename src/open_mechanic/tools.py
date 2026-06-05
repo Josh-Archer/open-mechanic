@@ -18,6 +18,7 @@ from rich.text import Text
 
 from open_mechanic.connection import OBDConnection, scan_ports
 from open_mechanic.dtc import DTCReader
+from open_mechanic.history import HistoryStore
 from open_mechanic.local_store import (
     PROFILE_PATH,
     SESSIONS_DIR,
@@ -28,6 +29,7 @@ from open_mechanic.local_store import (
     save_vehicle_profile,
 )
 from open_mechanic.mode6 import MisfireSummary, Mode6Reader, Mode6TestResult, diagnose_misfires
+from open_mechanic.prediction import PredictiveMaintenanceEngine
 from open_mechanic.reader import SENSOR_COMMANDS, SensorPoller, SensorValue
 
 VERSION = "0.1.0"
@@ -164,6 +166,13 @@ def main(argv: list[str] | None = None) -> int:
     tools_parser = subparsers.add_parser("tools", help="Open the read-only tools menu")
     _add_connection_args(tools_parser)
 
+    history_parser = subparsers.add_parser("history", help="Show recorded local history")
+    history_parser.add_argument("--vehicle-id", type=int, default=None)
+    history_parser.add_argument("--limit", type=int, default=20)
+
+    predict_parser = subparsers.add_parser("predict", help="Run local predictive risk scoring")
+    predict_parser.add_argument("--vehicle-id", type=int, default=None)
+
     for name in ("sensors", "dtcs", "readiness", "freeze-frame", "mode6", "snapshot", "profile"):
         cmd = subparsers.add_parser(name, help=f"Run {name} tool")
         _add_connection_args(cmd)
@@ -188,6 +197,16 @@ def main(argv: list[str] | None = None) -> int:
         profile = prompt_vehicle_profile(console)
         show_profile(console, profile)
         return 0
+    if args.command == "history":
+        show_history(console, HistoryStore(), vehicle_id=args.vehicle_id, limit=args.limit)
+        return 0
+    if args.command == "predict":
+        return show_predictions(
+            console,
+            HistoryStore(),
+            PredictiveMaintenanceEngine(),
+            vehicle_id=args.vehicle_id,
+        )
 
     return run_direct_tool(args.command, args, console)
 
@@ -487,6 +506,81 @@ def show_profile(console: Console, profile: VehicleProfile | None = None) -> Non
         )
         table.add_row("Storage", str(PROFILE_PATH))
     console.print(table)
+
+
+def show_history(
+    console: Console,
+    store: HistoryStore,
+    *,
+    vehicle_id: int | None = None,
+    limit: int = 20,
+) -> None:
+    sessions = store.list_sessions(vehicle_id=vehicle_id, limit=max(1, limit), offset=0)
+    table = Table(title="Recorded History", border_style="dim")
+    table.add_column("Session", style="bold")
+    table.add_column("Vehicle")
+    table.add_column("Started")
+    table.add_column("Sensors", justify="right")
+    table.add_column("DTCs", justify="right")
+    table.add_column("Protocol")
+    if not sessions:
+        table.add_row("none", str(vehicle_id or "all"), "No recorded sessions", "0", "0", "")
+    else:
+        for session in sessions:
+            table.add_row(
+                str(session.id),
+                str(session.vehicle_id),
+                session.started_at.isoformat(timespec="seconds"),
+                str(session.sensor_count),
+                str(session.dtc_count),
+                session.protocol or "",
+            )
+    console.print(table)
+
+
+def show_predictions(
+    console: Console,
+    store: HistoryStore,
+    engine: PredictiveMaintenanceEngine,
+    *,
+    vehicle_id: int | None = None,
+) -> int:
+    resolved_vehicle_id = _resolve_vehicle_id(store, vehicle_id)
+    if resolved_vehicle_id is None:
+        console.print("[yellow]No recorded vehicle history found.[/yellow]")
+        return 1
+
+    history = store.get_vehicle_history(resolved_vehicle_id)
+    if history is None:
+        console.print(f"[yellow]No recorded history for vehicle {resolved_vehicle_id}.[/yellow]")
+        return 1
+
+    predictions = store.save_predictions(resolved_vehicle_id, engine.score(history))
+    table = Table(title="Predictive Risk Scores", border_style="yellow")
+    table.add_column("Issue", style="bold")
+    table.add_column("Risk", justify="right")
+    table.add_column("Confidence", justify="right")
+    table.add_column("Severity")
+    table.add_column("Explanation")
+    for prediction in predictions:
+        table.add_row(
+            prediction.issue,
+            f"{prediction.risk_score:.2f}",
+            f"{prediction.confidence:.2f}",
+            prediction.severity,
+            prediction.explanation,
+        )
+    console.print(table)
+    return 0
+
+
+def _resolve_vehicle_id(store: HistoryStore, vehicle_id: int | None) -> int | None:
+    if vehicle_id is not None:
+        return vehicle_id
+    vehicles = store.list_vehicles()
+    if not vehicles:
+        return None
+    return vehicles[0].id
 
 
 def show_live_sensors(

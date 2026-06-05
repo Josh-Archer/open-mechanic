@@ -77,6 +77,10 @@ open-mechanic
 # Or run a one-shot AI diagnosis
 python scripts/diagnose.py --vehicle "2018 Ford F-150" --mileage 85000 --protocol 6
 
+# Review locally stored diagnostic history and predictive risk scores
+open-mechanic history
+open-mechanic predict
+
 # Or run the local read-only API
 uvicorn open_mechanic.api:create_app --factory --reload
 ```
@@ -131,14 +135,16 @@ Available now:
 
 - Read-only CLI tools menu with vehicle profile, live sensors, DTCs, readiness, freeze-frame, and health snapshot views
 - Mode 6 onboard monitor test reads, including best-effort misfire indicators before a confirmed DTC
-- Read-only FastAPI backend for vehicle profile, live sensors, DTCs, Mode 6, health snapshot, and diagnosis
+- CLI history and local predictive risk scoring commands
+- FastAPI backend for vehicle profile, live sensors, DTCs, Mode 6, health snapshot, diagnosis, local history, maintenance events, anonymized export, and predictions
 - One-shot AI diagnosis script backed by Anthropic Claude
-- SQLite data models and local JSON session logs
+- SQLite data models, local JSON session logs, and recorded diagnostic history
 - Vite/TypeScript public website
 
 Planned:
 
 - Interactive web dashboard and repair guide viewer
+- Opt-in hosted/community corpus for cross-car learning
 - Docker/self-hosted deployment package
 - Additional AI provider backends beyond Anthropic
 
@@ -169,7 +175,12 @@ GET  /api/live             — one-shot live sensor snapshot
 GET  /api/dtc              — current fault codes
 GET  /api/mode6            — supported Mode 6 onboard monitor test results
 GET  /api/snapshot         — combined connection, sensor, DTC, Mode 6, and misfire snapshot
+POST /api/snapshot/record  — record one snapshot into local history
 POST /api/diagnose         — trigger AI diagnosis
+GET  /api/history/vehicles — recorded vehicles
+GET  /api/history/sessions — recorded sessions
+POST /api/predictions/run  — calculate local predictive risk scores
+GET  /api/predictions/current — latest stored predictions
 ```
 
 See [docs/API.md](docs/API.md) for request/response contracts and planned dashboard endpoints.

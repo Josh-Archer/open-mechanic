@@ -18,6 +18,8 @@ def test_init_db_creates_parent_directory_and_tables(tmp_path: Path) -> None:
             "diagnostic_sessions",
             "diagnosis_results",
             "dtc_records",
+            "maintenance_events",
+            "prediction_results",
             "sensor_readings",
             "vehicle_profiles",
         ]

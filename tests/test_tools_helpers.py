@@ -121,6 +121,33 @@ def test_main_dispatches_menu_and_direct_tool(monkeypatch: pytest.MonkeyPatch) -
     assert tools.main(["dtcs"]) == 4
 
 
+def test_main_dispatches_history_and_predict(monkeypatch: pytest.MonkeyPatch) -> None:
+    called: list[tuple[str, object, object | None, object | None]] = []
+    store = object()
+    engine = object()
+    monkeypatch.setattr(tools, "ensure_local_dirs", lambda: None)
+    monkeypatch.setattr(tools, "HistoryStore", lambda: store)
+    monkeypatch.setattr(tools, "PredictiveMaintenanceEngine", lambda: engine)
+    monkeypatch.setattr(
+        tools,
+        "show_history",
+        lambda console, store, vehicle_id=None, limit=20: called.append(
+            ("history", store, vehicle_id, limit)
+        ),
+    )
+    monkeypatch.setattr(
+        tools,
+        "show_predictions",
+        lambda console, store, engine, vehicle_id=None: (
+            called.append(("predict", store, engine, vehicle_id)) or 8
+        ),
+    )
+
+    assert tools.main(["history", "--vehicle-id", "3", "--limit", "5"]) == 0
+    assert tools.main(["predict", "--vehicle-id", "3"]) == 8
+    assert called == [("history", store, 3, 5), ("predict", store, engine, 3)]
+
+
 def test_main_tools_command_dispatches_menu(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(tools, "ensure_local_dirs", lambda: None)
     monkeypatch.setattr(tools, "run_tools_menu", lambda args, console: 6)
@@ -322,6 +349,96 @@ def test_show_profile_renders_missing_and_present_profile(monkeypatch: pytest.Mo
     output = console.export_text()
     assert "not set" in output
     assert "2018 Ford F-150" in output
+
+
+def test_show_history_renders_sessions_and_empty() -> None:
+    console = Console(record=True)
+
+    class FakeHistoryStore:
+        def __init__(self, sessions: list[object]) -> None:
+            self.sessions = sessions
+
+        def list_sessions(
+            self, *, vehicle_id: int | None = None, limit: int = 20, offset: int = 0
+        ) -> list[object]:
+            assert limit >= 1
+            assert offset == 0
+            return self.sessions
+
+    tools.show_history(
+        console,
+        FakeHistoryStore(
+            [
+                SimpleNamespace(
+                    id=1,
+                    vehicle_id=2,
+                    started_at=datetime(2026, 5, 31, 12, 0, 0),
+                    sensor_count=3,
+                    dtc_count=1,
+                    protocol="CAN",
+                )
+            ]
+        ),  # type: ignore[arg-type]
+        vehicle_id=2,
+        limit=0,
+    )
+    tools.show_history(console, FakeHistoryStore([]), vehicle_id=None)  # type: ignore[arg-type]
+
+    output = console.export_text()
+    assert "Recorded History" in output
+    assert "CAN" in output
+    assert "No recorded sessions" in output
+
+
+def test_show_predictions_handles_missing_history_and_success() -> None:
+    console = Console(record=True)
+
+    class FakePredictionEngine:
+        def score(self, history: object) -> list[object]:
+            return [object()]
+
+    class EmptyStore:
+        def list_vehicles(self) -> list[object]:
+            return []
+
+        def get_vehicle_history(self, vehicle_id: int) -> object | None:
+            return None
+
+    class MissingHistoryStore(EmptyStore):
+        pass
+
+    class SuccessStore:
+        def list_vehicles(self) -> list[object]:
+            return [SimpleNamespace(id=7)]
+
+        def get_vehicle_history(self, vehicle_id: int) -> object:
+            assert vehicle_id == 7
+            return object()
+
+        def save_predictions(self, vehicle_id: int, predictions: list[object]) -> list[object]:
+            assert vehicle_id == 7
+            assert len(predictions) == 1
+            return [
+                SimpleNamespace(
+                    issue="Recurring DTC P0420",
+                    risk_score=0.7,
+                    confidence=0.6,
+                    severity="warning",
+                    explanation="Repeated fault code",
+                )
+            ]
+
+    assert tools.show_predictions(console, EmptyStore(), FakePredictionEngine()) == 1  # type: ignore[arg-type]
+    assert (
+        tools.show_predictions(console, MissingHistoryStore(), FakePredictionEngine(), vehicle_id=9)
+        == 1
+    )
+    assert tools.show_predictions(console, SuccessStore(), FakePredictionEngine()) == 0  # type: ignore[arg-type]
+
+    output = console.export_text()
+    assert "No recorded vehicle history found" in output
+    assert "No recorded history for vehicle 9" in output
+    assert "Recurring DTC P0420" in output
 
 
 class _FakeToolConnection:

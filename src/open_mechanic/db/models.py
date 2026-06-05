@@ -86,6 +86,37 @@ class DiagnosisResult(Base):
     disclaimer: Mapped[str]
 
 
+class MaintenanceEvent(Base):
+    """A user-recorded maintenance or repair event for a vehicle."""
+
+    __tablename__ = "maintenance_events"
+
+    id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
+    vehicle_id: Mapped[int] = mapped_column(ForeignKey("vehicle_profiles.id"))
+    occurred_at: Mapped[datetime] = mapped_column(default=datetime.utcnow)
+    mileage: Mapped[int | None]
+    event_type: Mapped[str]
+    description: Mapped[str]
+    cost_usd: Mapped[int | None]
+    created_at: Mapped[datetime] = mapped_column(default=datetime.utcnow)
+
+
+class PredictionResult(Base):
+    """A locally generated predictive-maintenance risk score."""
+
+    __tablename__ = "prediction_results"
+
+    id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
+    vehicle_id: Mapped[int] = mapped_column(ForeignKey("vehicle_profiles.id"))
+    generated_at: Mapped[datetime] = mapped_column(default=datetime.utcnow)
+    issue: Mapped[str]
+    risk_score: Mapped[float]
+    confidence: Mapped[float]
+    severity: Mapped[str]
+    explanation: Mapped[str]
+    source_signals_json: Mapped[str]
+
+
 def init_db(db_path: str | None = None) -> Engine:
     """Initialise the SQLite database and create all tables.
 

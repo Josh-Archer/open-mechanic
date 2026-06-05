@@ -1,8 +1,8 @@
 # API Contract
 
-Last reviewed: 2026-05-30
+Last reviewed: 2026-05-31
 
-The FastAPI backend is a read-only Phase 3 foundation for dashboards, local automations, and future self-hosted deployments. It wraps the existing OBD, DTC, vehicle profile, and AI diagnostic modules without requiring web callers to know those internals.
+The FastAPI backend is a local-first Phase 3 foundation for dashboards, local automations, predictive maintenance, and future self-hosted deployments. It wraps the existing OBD, DTC, vehicle profile, history, prediction, and AI diagnostic modules without requiring web callers to know those internals.
 
 ## Run Locally
 
@@ -23,7 +23,16 @@ Hardware calls use `OPEN_MECHANIC_API_OBD_TIMEOUT=3.0` and `OPEN_MECHANIC_API_OB
 | `GET` | `/api/dtc` | Current fault codes. |
 | `GET` | `/api/mode6` | Supported Mode 6 onboard monitor test results. |
 | `GET` | `/api/snapshot` | Combined connection, sensor, DTC, Mode 6, and misfire snapshot. |
+| `POST` | `/api/snapshot/record` | Record one combined snapshot into local SQLite history. |
 | `POST` | `/api/diagnose` | AI diagnosis using the current snapshot and submitted vehicle details. |
+| `GET` | `/api/history/vehicles` | Vehicles present in local history. |
+| `GET` | `/api/history/sessions` | Recorded diagnostic sessions, optionally filtered by vehicle. |
+| `GET` | `/api/history/sessions/{session_id}` | Recorded session details, including sensors and DTCs. |
+| `POST` | `/api/history/maintenance-events` | Add a user maintenance/repair event for prediction context. |
+| `POST` | `/api/history/import` | Import local JSONL session log rows. |
+| `GET` | `/api/history/export` | Export anonymized local history for backup or opt-in sharing. |
+| `POST` | `/api/predictions/run` | Run deterministic local predictive risk scoring for a vehicle. |
+| `GET` | `/api/predictions/current` | Latest stored predictions for a vehicle. |
 
 ## Response Shapes
 
@@ -149,6 +158,111 @@ Request:
 }
 ```
 
+`POST /api/snapshot/record`
+
+Request:
+
+```json
+{
+  "year": 2018,
+  "make": "Ford",
+  "model": "F-150",
+  "mileage": 85000,
+  "vin": null
+}
+```
+
+Response:
+
+```json
+{
+  "connected": true,
+  "vehicle_id": 1,
+  "session_id": 10,
+  "sensors_recorded": 13,
+  "dtcs_recorded": 1,
+  "timestamp": "2026-05-31T12:00:00"
+}
+```
+
+`GET /api/history/vehicles`
+
+```json
+[
+  {
+    "id": 1,
+    "year": 2018,
+    "make": "Ford",
+    "model": "F-150",
+    "mileage": 85000,
+    "vin": null,
+    "created_at": "2026-05-31T12:00:00"
+  }
+]
+```
+
+`GET /api/history/sessions?vehicle_id=1&limit=20&offset=0`
+
+```json
+[
+  {
+    "id": 10,
+    "vehicle_id": 1,
+    "started_at": "2026-05-31T12:00:00",
+    "ended_at": "2026-05-31T12:00:01",
+    "port_used": "/dev/ttyUSB0",
+    "protocol": "CAN",
+    "sensor_count": 13,
+    "dtc_count": 1
+  }
+]
+```
+
+`POST /api/history/maintenance-events`
+
+```json
+{
+  "vehicle_id": 1,
+  "event_type": "oil_change",
+  "description": "Changed oil and filter",
+  "mileage": 85000,
+  "occurred_at": "2026-05-01T09:00:00",
+  "cost_usd": 45
+}
+```
+
+`POST /api/predictions/run`
+
+Request:
+
+```json
+{
+  "vehicle_id": 1
+}
+```
+
+Response:
+
+```json
+[
+  {
+    "id": 4,
+    "vehicle_id": 1,
+    "generated_at": "2026-05-31T12:05:00",
+    "issue": "Recurring DTC P0420",
+    "risk_score": 0.7,
+    "confidence": 0.6,
+    "severity": "warning",
+    "explanation": "P0420 appeared in 2 recorded session(s), including 2 confirmed observation(s).",
+    "source_signals": ["P0420 session count=2", "P0420 confirmed count=2"]
+  }
+]
+```
+
+`GET /api/history/export`
+
+Returns a schema-versioned JSON object containing anonymized `vehicle_key` values, recorded sessions, maintenance events, and prediction records. Raw VINs are not included. `OPEN_MECHANIC_EXPORT_SALT` controls the local hash salt.
+
 Response:
 
 ```json
@@ -176,10 +290,11 @@ Response:
 - Read `severity` and `category` as display hints. Do not use either value to clear codes or recommend safety-critical action without the disclaimer.
 - Mode 6 is best-effort and vehicle-dependent. Missing Mode 6 data means unsupported/no data, not a failed monitor.
 - `misfire_summary` is a triage aid built from Mode 6 misfire monitors, P030x/P031x DTCs, and supporting live sensor clues. It is not a substitute for mechanical confirmation.
-- The current API is local-first. Auth, sessions, history, and hosted multi-user access are not implemented.
+- The current API is local-first. Auth, hosted multi-user access, and community upload are not implemented.
+- Predictive risk scores are deterministic and explainable; they do not require an AI API key.
+- Anonymized export is for backup or explicit opt-in sharing. There is no automatic upload.
 
 ## Planned Endpoints
 
-- `GET /api/history`: past diagnostic sessions once session persistence is promoted from local JSON logs.
 - `GET /api/guides/{dtc}`: repair guide content once guide sources and licensing are finalized.
 - `GET /api/live/stream`: optional SSE stream for dashboards that need live updates.

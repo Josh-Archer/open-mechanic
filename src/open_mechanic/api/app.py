@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException
 
 from .schemas import (
     DiagnoseRequest,
@@ -8,7 +8,19 @@ from .schemas import (
     DTCResponse,
     HealthResponse,
     HealthSnapshotResponse,
+    HistoryExportResponse,
+    HistoryImportRequest,
+    HistoryImportResponse,
+    HistorySessionDetailResponse,
+    HistorySessionSummaryResponse,
+    HistoryVehicleResponse,
+    MaintenanceEventRequest,
+    MaintenanceEventResponse,
     Mode6TestResponse,
+    PredictionResponse,
+    PredictionRunRequest,
+    RecordSnapshotResponse,
+    VehicleProfileRequest,
     VehicleProfileResponse,
 )
 from .services import DiagnosticAPIService
@@ -45,5 +57,50 @@ def create_app(service: DiagnosticAPIService | None = None) -> FastAPI:
     @app.post("/api/diagnose", response_model=DiagnosisResponse)
     def diagnose(request: DiagnoseRequest) -> DiagnosisResponse:
         return api_service.diagnose(request)
+
+    @app.post("/api/snapshot/record", response_model=RecordSnapshotResponse)
+    def record_snapshot(request: VehicleProfileRequest) -> RecordSnapshotResponse:
+        return api_service.record_snapshot(request)
+
+    @app.get("/api/history/vehicles", response_model=list[HistoryVehicleResponse])
+    def history_vehicles() -> list[HistoryVehicleResponse]:
+        return api_service.list_history_vehicles()
+
+    @app.get("/api/history/sessions", response_model=list[HistorySessionSummaryResponse])
+    def history_sessions(
+        vehicle_id: int | None = None, limit: int = 20, offset: int = 0
+    ) -> list[HistorySessionSummaryResponse]:
+        return api_service.list_history_sessions(
+            vehicle_id=vehicle_id,
+            limit=limit,
+            offset=offset,
+        )
+
+    @app.get("/api/history/sessions/{session_id}", response_model=HistorySessionDetailResponse)
+    def history_session(session_id: int) -> HistorySessionDetailResponse:
+        detail = api_service.get_history_session(session_id)
+        if detail is None:
+            raise HTTPException(status_code=404, detail="history session not found")
+        return detail
+
+    @app.post("/api/history/maintenance-events", response_model=MaintenanceEventResponse)
+    def maintenance_event(request: MaintenanceEventRequest) -> MaintenanceEventResponse:
+        return api_service.add_maintenance_event(request)
+
+    @app.post("/api/history/import", response_model=HistoryImportResponse)
+    def history_import(request: HistoryImportRequest) -> HistoryImportResponse:
+        return api_service.import_history(request)
+
+    @app.get("/api/history/export", response_model=HistoryExportResponse)
+    def history_export(vehicle_id: int | None = None) -> HistoryExportResponse:
+        return api_service.export_history(vehicle_id=vehicle_id)
+
+    @app.post("/api/predictions/run", response_model=list[PredictionResponse])
+    def prediction_run(request: PredictionRunRequest) -> list[PredictionResponse]:
+        return api_service.run_predictions(request)
+
+    @app.get("/api/predictions/current", response_model=list[PredictionResponse])
+    def prediction_current(vehicle_id: int) -> list[PredictionResponse]:
+        return api_service.get_current_predictions(vehicle_id)
 
     return app

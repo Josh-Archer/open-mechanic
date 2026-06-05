@@ -1,12 +1,26 @@
 from __future__ import annotations
 
 from datetime import datetime
+from pathlib import Path
 from typing import Any
 
 from open_mechanic.ai.diagnose import DiagnosisResult
-from open_mechanic.api.schemas import DiagnoseRequest
-from open_mechanic.api.services import DiagnosticAPIService, _default_connection
+from open_mechanic.api.schemas import (
+    DiagnoseRequest,
+    HealthSnapshotResponse,
+    HistoryImportRequest,
+    MaintenanceEventRequest,
+    PredictionRunRequest,
+    SensorReadingResponse,
+    VehicleProfileRequest,
+)
+from open_mechanic.api.services import (
+    DiagnosticAPIService,
+    _default_connection,
+    _latest_snapshot_timestamp,
+)
 from open_mechanic.dtc import DTCCode
+from open_mechanic.history import HistoryStore, PredictionInput
 from open_mechanic.local_store import VehicleProfile
 from open_mechanic.mode6 import Mode6TestResult
 from open_mechanic.reader import SensorValue
@@ -27,6 +41,9 @@ class FakeConnection:
 
     def disconnect(self) -> None:
         self.disconnected = True
+
+    def is_connected(self) -> bool:
+        return self.connects
 
     def get_port(self) -> str:
         return "/dev/test"
@@ -126,6 +143,20 @@ class FakeEngine:
             cached=False,
             timestamp=datetime(2026, 5, 22, 1, 2, 3),
         )
+
+
+class FakePredictionEngine:
+    def score(self, history: object) -> list[PredictionInput]:
+        return [
+            PredictionInput(
+                issue="Recurring DTC P0420",
+                risk_score=0.7,
+                confidence=0.6,
+                severity="warning",
+                explanation="Repeated fault code",
+                source_signals=["P0420"],
+            )
+        ]
 
 
 def test_vehicle_profile_reports_unconfigured_when_profile_missing() -> None:
@@ -286,3 +317,130 @@ def test_default_connection_uses_api_tuned_timeout(monkeypatch: Any) -> None:
     _ = _default_connection()
 
     assert captured == {"timeout": 1.5, "max_retries": 2}
+
+
+def test_latest_snapshot_timestamp_uses_sensor_timestamp() -> None:
+    timestamp = datetime(2026, 5, 31, 12, 0, 0)
+    snapshot = HealthSnapshotResponse(
+        connected=True,
+        port="/dev/test",
+        protocol="CAN",
+        sensors=[
+            SensorReadingResponse(
+                name="RPM",
+                value="750",
+                unit="rpm",
+                supported=True,
+                timestamp=timestamp,
+            )
+        ],
+        dtcs=[],
+    )
+
+    assert _latest_snapshot_timestamp(snapshot) == timestamp
+
+
+def test_record_snapshot_persists_history_when_connected(tmp_path: Path, monkeypatch: Any) -> None:
+    connection = FakeConnection()
+    monkeypatch.setattr("open_mechanic.api.services.SensorPoller", FakeSensorPoller)
+    monkeypatch.setattr("open_mechanic.api.services.DTCReader", FakeDTCReader)
+    store = HistoryStore(db_path=str(tmp_path / "history.db"))
+    service = DiagnosticAPIService(
+        connection_factory=lambda: connection,
+        history_store=store,
+    )
+
+    response = service.record_snapshot(
+        VehicleProfileRequest(year=2018, make="Ford", model="F-150", mileage=85000)
+    )
+
+    assert response.connected is True
+    assert response.sensors_recorded == 1
+    assert response.dtcs_recorded == 1
+    assert service.list_history_sessions()[0].sensor_count == 1
+    assert service.list_history_vehicles()[0].model == "F-150"
+    assert service.get_history_session(response.session_id or 0) is not None
+
+
+def test_record_snapshot_returns_empty_when_adapter_unavailable(tmp_path: Path) -> None:
+    service = DiagnosticAPIService(
+        connection_factory=lambda: FakeConnection(connects=False),
+        history_store=HistoryStore(db_path=str(tmp_path / "history.db")),
+    )
+
+    response = service.record_snapshot(
+        VehicleProfileRequest(year=2018, make="Ford", model="F-150", mileage=85000)
+    )
+
+    assert response.connected is False
+    assert response.session_id is None
+
+
+def test_history_maintenance_prediction_export_and_import(tmp_path: Path, monkeypatch: Any) -> None:
+    monkeypatch.setattr("open_mechanic.api.services.SensorPoller", FakeSensorPoller)
+    monkeypatch.setattr("open_mechanic.api.services.DTCReader", FakeDTCReader)
+    store = HistoryStore(db_path=str(tmp_path / "history.db"))
+    service = DiagnosticAPIService(
+        connection_factory=lambda: FakeConnection(),
+        history_store=store,
+        prediction_engine=FakePredictionEngine(),
+    )
+    recorded = service.record_snapshot(
+        VehicleProfileRequest(year=2018, make="Ford", model="F-150", mileage=85000)
+    )
+    vehicle_id = recorded.vehicle_id or 0
+
+    event = service.add_maintenance_event(
+        MaintenanceEventRequest(
+            vehicle_id=vehicle_id,
+            event_type="oil_change",
+            description="Changed oil",
+            mileage=85000,
+        )
+    )
+    predictions = service.run_predictions(PredictionRunRequest(vehicle_id=vehicle_id))
+    current = service.get_current_predictions(vehicle_id)
+    export = service.export_history(vehicle_id)
+    imported = service.import_history(
+        HistoryImportRequest(
+            rows=[
+                {
+                    "timestamp": "2026-05-31T12:00:00",
+                    "event": "session_started",
+                    "payload": {
+                        "vehicle": {"year": 2018, "make": "Ford", "model": "F-150", "mileage": 1}
+                    },
+                },
+                {
+                    "timestamp": "2026-05-31T12:00:01",
+                    "event": "sensor_snapshot",
+                    "payload": {"RPM": {"value": "750", "unit": "rpm"}},
+                },
+            ]
+        )
+    )
+
+    assert event.event_type == "oil_change"
+    assert predictions[0].issue == "Recurring DTC P0420"
+    assert current[0].risk_score == 0.7
+    assert export.schema_version == 1
+    assert imported.imported_sessions == 1
+    assert service.get_history_session(9999) is None
+    assert service.run_predictions(PredictionRunRequest(vehicle_id=9999)) == []
+
+
+def test_history_store_is_created_lazily(monkeypatch: Any) -> None:
+    created: list[bool] = []
+
+    class FakeHistoryStore:
+        def __init__(self) -> None:
+            created.append(True)
+
+        def list_vehicles(self) -> list[object]:
+            return []
+
+    monkeypatch.setattr("open_mechanic.api.services.HistoryStore", FakeHistoryStore)
+    service = DiagnosticAPIService()
+
+    assert service.list_history_vehicles() == []
+    assert created == [True]
