@@ -77,13 +77,16 @@ open-mechanic
 # Or run a one-shot AI diagnosis
 python scripts/diagnose.py --vehicle "2018 Ford F-150" --mileage 85000 --protocol 6
 
-# Review locally stored diagnostic history and predictive risk scores
+# Review SQLite history and predictive risk scores after recording snapshots
+# with the API or importing prior JSONL session logs
 open-mechanic history
 open-mechanic predict
 
 # Or run the local read-only API
 uvicorn open_mechanic.api:create_app --factory --reload
 ```
+
+History and prediction data stays local by default in the SQLite database configured by `DB_PATH`. History is empty until you record snapshots with `POST /api/snapshot/record` or import prior JSONL logs with `POST /api/history/import`. Use `GET /api/history/export` only when you explicitly want to back up or share anonymized history.
 
 ---
 
@@ -179,11 +182,29 @@ POST /api/snapshot/record  — record one snapshot into local history
 POST /api/diagnose         — trigger AI diagnosis
 GET  /api/history/vehicles — recorded vehicles
 GET  /api/history/sessions — recorded sessions
+GET  /api/history/sessions/{session_id} — recorded session details
+POST /api/history/maintenance-events — add maintenance context
+POST /api/history/import — import local JSONL session log rows
+GET  /api/history/export — export anonymized recorded history
 POST /api/predictions/run  — calculate local predictive risk scores
 GET  /api/predictions/current — latest stored predictions
 ```
 
 See [docs/API.md](docs/API.md) for request/response contracts and planned dashboard endpoints.
+
+---
+
+## Local History and Predictive Risk Scoring
+
+`open-mechanic` can build up a local diagnostic history from live OBD snapshots and prior session logs. `POST /api/snapshot/record` stores the current sensor and DTC observations for a vehicle, while `POST /api/history/import` can backfill compatible JSONL rows from `local_data/sessions`.
+
+SQLite history, maintenance events, and prediction results live at `DB_PATH` (`data/sessions.db` by default). Legacy CLI JSONL logs remain under `local_data/sessions` and are only copied into SQLite when you import them.
+
+Predictions are deterministic and explainable. They do not call Claude or require an AI API key. The current engine scores repeated DTCs, latest sensor anomalies, coolant-temperature trends, mileage, and maintenance-event context, then stores the generated results for later retrieval.
+
+Mode 6 monitor results and `misfire_summary` are live diagnostic context from the Mode 6 work. They are included in health snapshots but are not currently persisted into history or scored by the prediction engine.
+
+Anonymized export is opt-in. `GET /api/history/export` returns schema-versioned history using hashed `vehicle_key` values and does not include raw VINs. Exports still include vehicle year/make/model, mileage, timestamps, protocol, and port metadata, so treat them as reduced-identification data rather than fully de-identified data. Set `OPEN_MECHANIC_EXPORT_SALT` before sharing exports if you want the generated keys to differ across installs or export batches.
 
 ---
 

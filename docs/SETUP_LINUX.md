@@ -103,9 +103,12 @@ OBD_PORT=                  # leave blank to auto-detect /dev/ttyUSB0
 OBD_BAUDRATE=              # leave blank (auto-detected as 115200 for OBDLink EX)
 OBD_PROTOCOL=6             # 6 = ISO 15765-4 CAN 11/500 (most 2008+ cars)
                            # Remove or leave blank to auto-detect (slower, ~30s)
+DB_PATH=data/sessions.db   # local history, maintenance events, and predictions
 ```
 
 > **Why `OBD_PROTOCOL=6`?** Auto-detection tries every OBD protocol sequentially and can take 30+ seconds or time out entirely. Protocol 6 (ISO 15765-4 CAN 11/500) covers the vast majority of cars made after 2008. If your car is older or doesn't respond, remove this line to fall back to auto-detection.
+
+`DB_PATH` stores recorded diagnostic sessions, maintenance events, and prediction results. Use the API to record snapshots or import prior JSONL logs, and use `GET /api/history/export` only when you explicitly want an anonymized backup or shareable export.
 
 Get a Claude API key at: https://console.anthropic.com/
 
