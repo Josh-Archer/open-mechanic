@@ -168,6 +168,26 @@ def test_query_handles_null_response_and_query_error() -> None:
     assert mode6._query_mode6_monitor(failing_conn, command)[0].status == "error: boom"
 
 
+def test_misfire_summary_does_not_report_unavailable_results_as_clean() -> None:
+    command = _FakeCommand("MONITOR_MISFIRE_GENERAL", "Misfire Monitor", 161)
+
+    for status in ("no data", "no tests", "error: timeout"):
+        summary = diagnose_misfires([mode6._empty_result(command, status)], [], {})
+
+        assert summary.supported is False
+        assert summary.status == "no_mode6_misfire_data"
+
+    inconclusive = diagnose_misfires([_result(None)], [], {})
+
+    assert inconclusive.supported is True
+    assert inconclusive.status == "inconclusive"
+
+    partial = diagnose_misfires([_result(True), mode6._empty_result(command, "no data")], [], {})
+
+    assert partial.supported is True
+    assert partial.status == "inconclusive"
+
+
 def test_result_from_test_handles_unknown_names_and_uncomparable_values() -> None:
     command = object()
     test = SimpleNamespace(tid="bad", value="bad", min=0, max=1)

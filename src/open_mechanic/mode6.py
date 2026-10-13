@@ -348,6 +348,10 @@ def _summarize_misfires(
 ) -> MisfireSummary:
     has_dtc = any(finding.source == "dtc" for finding in findings)
     has_mode6_failure = any(finding.source == "mode6" for finding in findings)
+    reported_tests = [result for result in misfire_results if result.test_name != "No test result"]
+    has_unavailable_result = any(
+        result.test_name == "No test result" or result.passed is None for result in misfire_results
+    )
     if has_dtc:
         status = "confirmed_misfire"
         summary = "Misfire DTCs are present; prioritize ignition, fuel, and compression checks."
@@ -357,7 +361,10 @@ def _summarize_misfires(
     elif findings:
         status = "watch"
         summary = "No misfire-specific failures were reported, but supporting sensor data warrants monitoring."
-    elif misfire_results:
+    elif reported_tests and has_unavailable_result:
+        status = "inconclusive"
+        summary = "Some Mode 6 misfire monitor results were unavailable or inconclusive."
+    elif reported_tests:
         status = "no_misfire_detected"
         summary = "Mode 6 misfire monitors did not report failed tests."
     else:
@@ -365,7 +372,7 @@ def _summarize_misfires(
         summary = "No Mode 6 misfire monitor data was reported by this vehicle."
 
     return MisfireSummary(
-        supported=bool(misfire_results),
+        supported=bool(reported_tests),
         status=status,
         summary=summary,
         findings=findings,
